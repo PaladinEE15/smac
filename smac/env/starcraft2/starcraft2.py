@@ -310,6 +310,9 @@ class StarCraft2Env(MultiAgentEnv):
         self._sc2_proc = None
         self._controller = None
 
+        self.attack_map = np.zeros((self.n_agents,self.n_enemies)) #used to record attack actions
+        self.attack_record = np.zeros(self.n_agents) #used to record whether agent attacks
+
         # Try to avoid leaking SC2 processes on shutdown
         atexit.register(lambda: self.close())
 
@@ -430,7 +433,7 @@ class StarCraft2Env(MultiAgentEnv):
                 )
             )
 
-        return self.get_obs(), self.get_state()
+        return self.get_obs() #, self.get_state() no state provided!
 
     def _restart(self):
         """Restart the environment by killing all units on the map.
@@ -543,7 +546,7 @@ class StarCraft2Env(MultiAgentEnv):
 
         self.reward = reward
 
-        return reward, terminated, info
+        return self.get_obs(), reward, terminated, info
 
     def get_agent_action(self, a_id, action):
         """Construct the action for agent a_id."""
@@ -556,7 +559,6 @@ class StarCraft2Env(MultiAgentEnv):
         tag = unit.tag
         x = unit.pos.x
         y = unit.pos.y
-
         if action == 0:
             # no-op (valid only when dead)
             assert unit.health == 0, "No-op only available for dead agents."
@@ -633,6 +635,8 @@ class StarCraft2Env(MultiAgentEnv):
             else:
                 target_unit = self.enemies[target_id]
                 action_name = "attack"
+                self.attack_map[a_id, target_id] = 1 
+                self.attack_record[a_id] = 1
 
             action_id = actions[action_name]
             target_tag = target_unit.tag
@@ -771,6 +775,9 @@ class StarCraft2Env(MultiAgentEnv):
         sc_action = sc_pb.Action(action_raw=r_pb.ActionRaw(unit_command=cmd))
         return sc_action, action_num
 
+
+
+
     def reward_battle(self):
         """Reward function when self.reward_spare==False.
         Returns accumulative hit/shield point damage dealt to the enemy
@@ -781,12 +788,7 @@ class StarCraft2Env(MultiAgentEnv):
         if self.reward_sparse:
             return 0
 
-        reward = 0
-        delta_deaths = 0
-        delta_ally = 0
-        delta_enemy = 0
-
-        neg_scale = self.reward_negative_scale
+        reward = np.zeros(len(self.agents))
 
         # update deaths
         for al_id, al_unit in self.agents.items():
@@ -799,14 +801,8 @@ class StarCraft2Env(MultiAgentEnv):
                 if al_unit.health == 0:
                     # just died
                     self.death_tracker_ally[al_id] = 1
-                    if not self.reward_only_positive:
-                        delta_deaths -= self.reward_death_value * neg_scale
-                    delta_ally += prev_health * neg_scale
-                else:
-                    # still alive
-                    delta_ally += neg_scale * (
-                        prev_health - al_unit.health - al_unit.shield
-                    )
+                reward[al_id] += -0.01 #timestep penalty
+                reward[al_id] += (al_unit.health + al_unit.shield - prev_health)/(al_unit.health_max+self.unit_max_shield(al_unit)) #health penalty
 
         for e_id, e_unit in self.enemies.items():
             if not self.death_tracker_enemy[e_id]:
@@ -816,17 +812,36 @@ class StarCraft2Env(MultiAgentEnv):
                 )
                 if e_unit.health == 0:
                     self.death_tracker_enemy[e_id] = 1
-                    delta_deaths += self.reward_death_value
-                    delta_enemy += prev_health
-                else:
-                    delta_enemy += prev_health - e_unit.health - e_unit.shield
+                atk_map = self.attack_map[:,e_id]
+                enemy_dmg_reward = (prev_health - e_unit.health - e_unit.shield)/(e_unit.health_max+self.unit_max_shield(e_unit))
+                reward += atk_map*enemy_dmg_reward
+        
+        self.attack_map = np.zeros((self.n_agents,self.n_enemies))
+        #reset attack_record after using
+        return reward
 
-        if self.reward_only_positive:
-            reward = abs(delta_enemy + delta_deaths)  # shield regeneration
+    def reward_terminal(self):
+        # Terminal reward based on whether we won or not
+        reward_enemies = 0
+        if np.all(self.death_tracker_enemy == 1) and np.any(self.death_tracker_ally == 1):
+            won = 1
         else:
-            reward = delta_enemy + delta_deaths - delta_ally
+            won = 0
+        for e_id, e_unit in self.enemies.items():
+            if not self.death_tracker_enemy[e_id]:
+                reward_enemies += - 3*(e_unit.health + e_unit.shield)/(e_unit.health_max+self.unit_max_shield(e_unit))
+        
+        reward = reward_enemies * np.ones(self.n_agents)
+
+        for al_id, al_unit in self.agents.items():
+            if won and self.attack_record[al_id]:
+                reward[al_id] += 5*self.n_enemies + 3*(al_unit.health + al_unit.shield)/(al_unit.health_max+self.unit_max_shield(al_unit))
+            else:
+                reward[al_id] += - 3*(al_unit.health + al_unit.shield)/(al_unit.health_max+self.unit_max_shield(al_unit))
 
         return reward
+
+
 
     def get_total_actions(self):
         """Returns the total number of actions an agent could ever take."""
@@ -1130,16 +1145,14 @@ class StarCraft2Env(MultiAgentEnv):
         during decentralised execution.
         """
         agents_obs = [self.get_obs_agent(i) for i in range(self.n_agents)]
-        return agents_obs
+        return np.vstack(agents_obs) 
 
     def get_state(self):
         """Returns the global state.
         NOTE: This functon should not be used during decentralised execution.
         """
         if self.obs_instead_of_state:
-            obs_concat = np.concatenate(self.get_obs(), axis=0).astype(
-                np.float32
-            )
+            obs_concat = self.get_obs().astype(np.float32)
             return obs_concat
 
         state_dict = self.get_state_dict()
