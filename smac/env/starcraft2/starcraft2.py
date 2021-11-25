@@ -13,7 +13,7 @@ import numpy as np
 import enum
 import math
 from absl import logging
-
+from gym import spaces
 from pysc2 import maps
 from pysc2 import run_configs
 from pysc2.lib import protocol
@@ -310,8 +310,17 @@ class StarCraft2Env(MultiAgentEnv):
         self._sc2_proc = None
         self._controller = None
 
+        #below are new features designed for IC3Net 
         self.attack_map = np.zeros((self.n_agents,self.n_enemies)) #used to record attack actions
         self.attack_record = np.zeros(self.n_agents) #used to record whether agent attacks
+        move_feats_dim = self.get_obs_move_feats_size()
+        enemy_feats_dim = self.get_obs_enemy_feats_size()
+        ally_feats_dim = self.get_obs_ally_feats_size()
+        own_feats_dim = self.get_obs_own_feats_size()
+        obs_dim = move_feats_dim + enemy_feats_dim + ally_feats_dim + own_feats_dim
+        self.observation_space = spaces.Box(low=-1, high=1, shape=(self.n_agents,obs_dim), dtype=float)
+        self.action_space = spaces.MultiDiscrete([self.n_actions])
+        
 
         # Try to avoid leaking SC2 processes on shutdown
         atexit.register(lambda: self.close())
@@ -407,6 +416,7 @@ class StarCraft2Env(MultiAgentEnv):
         else:
             self._restart()
 
+        self.stat = dict()
         # Information kept for counting the reward
         self.death_tracker_ally = np.zeros(self.n_agents)
         self.death_tracker_enemy = np.zeros(self.n_enemies)
@@ -495,6 +505,7 @@ class StarCraft2Env(MultiAgentEnv):
         terminated = False
         reward = self.reward_battle()
         info = {"battle_won": False}
+        self.stat['success'] = 0
 
         # count units that are still alive
         dead_allies, dead_enemies = 0, 0
@@ -516,6 +527,7 @@ class StarCraft2Env(MultiAgentEnv):
                 self.battles_won += 1
                 self.win_counted = True
                 info["battle_won"] = True
+                self.stat['success'] = 1
                 if not self.reward_sparse:
                     reward += self.reward_win
                 else:
@@ -545,6 +557,8 @@ class StarCraft2Env(MultiAgentEnv):
             reward /= self.max_reward / self.reward_scale_rate
 
         self.reward = reward
+        alive_mask = 1 - self.death_tracker_ally
+        info['alive_mask'] = alive_mask
 
         return self.get_obs(), reward, terminated, info
 
