@@ -82,12 +82,12 @@ class StarCraft2Env(MultiAgentEnv):
         state_last_action=True,
         state_timestep_number=False,
         reward_sparse=False,
-        reward_only_positive=True,
+        reward_only_positive=False,
         reward_death_value=10,
         reward_win=200,
         reward_defeat=0,
         reward_negative_scale=0.5,
-        reward_scale=True,
+        reward_scale=False,
         reward_scale_rate=20,
         replay_dir="",
         replay_prefix="",
@@ -528,17 +528,8 @@ class StarCraft2Env(MultiAgentEnv):
                 self.win_counted = True
                 info["battle_won"] = True
                 self.stat['success'] = 1
-                if not self.reward_sparse:
-                    reward += self.reward_win
-                else:
-                    reward = 1
             elif game_end_code == -1 and not self.defeat_counted:
                 self.defeat_counted = True
-                if not self.reward_sparse:
-                    reward += self.reward_defeat
-                else:
-                    reward = -1
-
         elif self._episode_steps >= self.episode_limit:
             # Episode limit reached
             terminated = True
@@ -547,14 +538,8 @@ class StarCraft2Env(MultiAgentEnv):
             self.battles_game += 1
             self.timeouts += 1
 
-        if self.debug:
-            logging.debug("Reward = {}".format(reward).center(60, "-"))
-
         if terminated:
             self._episode_count += 1
-
-        if self.reward_scale:
-            reward /= self.max_reward / self.reward_scale_rate
 
         self.reward = reward
         alive_mask = 1 - self.death_tracker_ally
