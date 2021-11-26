@@ -313,11 +313,7 @@ class StarCraft2Env(MultiAgentEnv):
         #below are new features designed for IC3Net 
         self.attack_map = np.zeros((self.n_agents,self.n_enemies)) #used to record attack actions
         self.attack_record = np.zeros(self.n_agents) #used to record whether agent attacks
-        move_feats_dim = self.get_obs_move_feats_size()
-        enemy_feats_dim = self.get_obs_enemy_feats_size()
-        ally_feats_dim = self.get_obs_ally_feats_size()
-        own_feats_dim = self.get_obs_own_feats_size()
-        obs_dim = move_feats_dim + enemy_feats_dim + ally_feats_dim + own_feats_dim
+        obs_dim = self.get_obs_size()
         self.observation_space = spaces.Box(low=-1, high=1, shape=(self.n_agents,obs_dim), dtype=float)
         self.action_space = spaces.MultiDiscrete([self.n_actions])
         
@@ -550,10 +546,11 @@ class StarCraft2Env(MultiAgentEnv):
     def get_agent_action(self, a_id, action):
         """Construct the action for agent a_id."""
         avail_actions = self.get_avail_agent_actions(a_id)
-        assert (
-            avail_actions[action] == 1
-        ), "Agent {} cannot perform action {}".format(a_id, action)
-
+        if avail_actions[action] == 0:
+            if avail_actions[1]:
+                action = 1
+            else:
+                action = 0
         unit = self.get_unit_by_id(a_id)
         tag = unit.tag
         x = unit.pos.x
